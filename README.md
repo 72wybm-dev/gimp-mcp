@@ -1,123 +1,157 @@
-# GIMP MCP
+# GIMP MCP Server
 
-This directory contains a local Model Context Protocol server for GIMP and a
-GIMP Python plug-in that exposes GIMP's Procedure Database (PDB) over a local
-Unix socket.
+Control GIMP from Claude Desktop, Codex, Cursor, and other Model Context
+Protocol clients. This project provides a local MCP server and a GIMP 3.x
+Python plug-in that expose GIMP automation through a secure Unix socket,
+including Procedure Database discovery, image export, canvas snapshots, context
+inspection, and batch operations.
 
-The design is intentionally small:
+Keywords: GIMP MCP, GIMP Model Context Protocol, Claude GIMP, Codex GIMP,
+AI image editing, GIMP automation, GIMP Python plug-in, GIMP PDB, MCP server.
 
-- `gimp_mcp.server` is the MCP stdio server used by an MCP client.
-- `bridge/gimp_mcp_bridge.py` is installed as a GIMP plug-in.
-- The bridge exposes PDB discovery and calls, so the MCP server can reach the
-  broad GIMP feature surface without registering thousands of MCP tools.
+## Why This Exists
 
-## Install
+GIMP has a powerful Python and Procedure Database API, but it is not easy for AI
+assistants to use directly. GIMP MCP bridges that gap:
 
-The scripts default to the installed app at `/Applications/GIMP.app`.
-The installer auto-detects the newest user profile under
-`~/Library/Application Support/GIMP`, such as `3.2`.
+- Ask an AI assistant to inspect or edit images in GIMP.
+- Search and call GIMP PDB procedures from MCP tools.
+- Capture the current canvas as MCP image content for visual verification.
+- Run repeatable image workflows without clicking through the GIMP UI.
+- Keep automation local by default with a user-owned Unix socket.
+
+The normal MCP path auto-starts a private headless GIMP bridge, so users do not
+need to open GIMP or click `Filters > Development`.
+
+## Features
+
+- **GIMP 3.x automation through MCP**
+- **PDB search, describe, and call** for broad GIMP feature coverage
+- **MCP image capture** with optional crop and max-size scaling
+- **Open image and layer inspection**
+- **Foreground/background, brush, font, opacity, antialias, and feather state**
+- **File open/export helpers** for PNG, JPEG, WebP, TIFF, GIF, BMP, and XCF
+- **Batch bridge operations**
+- **Headless auto-start** for production-style automation
+- **Manual visible-GIMP bridge** for debugging interactive sessions
+- **macOS-friendly installer** for `/Applications/GIMP.app`
+
+## Requirements
+
+- GIMP 3.x installed locally
+- Python 3.11+
+- An MCP-compatible client such as Codex, Claude Desktop, Cursor, or another
+  stdio MCP client
+
+This repo defaults to macOS and `/Applications/GIMP.app`. The bridge itself is
+Python/GIMP based and can be adapted for Linux by installing the plug-in into
+the relevant GIMP profile directory.
+
+## Quick Start
 
 ```sh
-git clone https://github.com/your-org/gimp-mcp.git
+git clone https://github.com/abelduarte/gimp-mcp.git
 cd gimp-mcp
+
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e .
+
 ./scripts/install_bridge.sh
 ./scripts/smoke_test.sh
 ```
 
-For a non-standard GIMP app path:
+If GIMP is not installed at `/Applications/GIMP.app`:
 
 ```sh
 GIMP_APP=/path/to/GIMP.app ./scripts/install_bridge.sh
+GIMP_APP=/path/to/GIMP.app ./scripts/smoke_test.sh
 ```
 
-Restart GIMP after installing the bridge.
+## MCP Client Configuration
 
-## Start The MCP Server
-
-For normal use, point your MCP client at:
+Use the wrapper script as your MCP server command:
 
 ```sh
-/path/to/gimp-mcp/scripts/run_mcp_server.sh
+/absolute/path/to/gimp-mcp/scripts/run_mcp_server.sh
 ```
 
-The repository also includes `.mcp.json` for clients that support project-local
-MCP discovery.
+The wrapper starts the stdio MCP server and automatically launches a private
+headless GIMP bridge if one is not already running.
 
-That script starts the MCP stdio server and automatically launches a private
-headless GIMP bridge if the socket is not already running. Users do not need to
-open GIMP or click a GIMP menu for automation workflows.
+### Codex
 
-Equivalent direct command:
-
-```sh
-gimp-mcp --auto-start-bridge --gimp-app /Applications/GIMP.app
-```
-
-The default bridge socket is:
-
-```text
-/tmp/gimp-mcp-$USER.sock
-```
-
-Set `GIMP_MCP_SOCKET` before launching GIMP and the MCP server if you want a
-different socket path.
-
-### Manual Debug Mode
-
-The plug-in still provides a manual fallback for debugging against a visible
-GIMP session:
-
-```text
-Filters > Development > Start MCP Bridge
-```
-
-This is not the recommended production path. It is useful when you explicitly
-want MCP calls to operate on the visible GIMP app process.
-
-## MCP Server Command
-
-Use this command in an MCP client configuration:
-
-```sh
-/path/to/gimp-mcp/scripts/run_mcp_server.sh
-```
-
-Codex can be configured with:
+Add this to your Codex MCP config:
 
 ```toml
 [mcp_servers.gimp]
 command = "/absolute/path/to/gimp-mcp/scripts/run_mcp_server.sh"
 ```
 
-Or, without the wrapper script:
+### Claude Desktop
 
-```sh
-gimp-mcp --auto-start-bridge --gimp-app /Applications/GIMP.app
+Add this to your Claude Desktop config:
+
+```json
+{
+  "mcpServers": {
+    "gimp": {
+      "command": "/absolute/path/to/gimp-mcp/scripts/run_mcp_server.sh"
+    }
+  }
+}
 ```
 
-## Tools
+### Project-local MCP discovery
 
-The MCP server exposes:
+The repository includes `.mcp.json` for clients that support project-local MCP
+server discovery.
 
-- `gimp.status`
-- `gimp.get_info`
-- `gimp.get_context_state`
-- `gimp.get_image_bitmap`
-- `gimp.list_images`
-- `gimp.get_image`
-- `gimp.procedure.search`
-- `gimp.procedure.describe`
-- `gimp.procedure.call`
-- `gimp.open`
-- `gimp.export`
-- `gimp.draw_polyline`
-- `gimp.batch`
+## How It Works
 
-Use `gimp.procedure.search` and `gimp.procedure.describe` before calling raw
-PDB procedures. Object arguments can be passed as IDs, for example:
+There are two pieces:
+
+- `gimp_mcp.server`: the stdio MCP server used by the AI client.
+- `bridge/gimp_mcp_bridge.py`: a GIMP Python plug-in that runs inside GIMP and
+  exposes a JSON bridge over a local Unix socket.
+
+Default socket:
+
+```text
+/tmp/gimp-mcp-$USER.sock
+```
+
+The socket is created with `0600` permissions. Anyone who can connect to it can
+drive the GIMP process, so do not expose it to untrusted users.
+
+## Available Tools
+
+- `gimp.status`: check bridge health
+- `gimp.get_info`: inspect GIMP version, directories, session, platform, and PDB
+- `gimp.get_context_state`: inspect colors, brush, opacity, font, antialias, and feather
+- `gimp.get_image_bitmap`: return a GIMP image as MCP image content
+- `gimp.list_images`: list open images and layer trees
+- `gimp.get_image`: inspect one image by ID
+- `gimp.procedure.search`: search GIMP's Procedure Database
+- `gimp.procedure.describe`: inspect procedure arguments and return values
+- `gimp.procedure.call`: call a GIMP PDB procedure
+- `gimp.open`: open an image file
+- `gimp.export`: export an image file
+- `gimp.draw_polyline`: draw deterministic pixel polylines
+- `gimp.batch`: run bridge operations in sequence
+
+## Example PDB Call
+
+Search before calling:
+
+```json
+{
+  "query": "image-resize",
+  "limit": 10
+}
+```
+
+Then call the procedure with exact PDB argument names:
 
 ```json
 {
@@ -132,31 +166,84 @@ PDB procedures. Object arguments can be passed as IDs, for example:
 }
 ```
 
-## Current Scope
+## Visual Verification
 
-This is the first usable slice:
+Use `gimp.get_image_bitmap` to let the AI client see the current GIMP image:
 
-- Live GIMP bridge over a local Unix socket.
-- PDB search/describe/call.
-- MCP image capture for the current image or a cropped/scaled region.
-- Context inspection for current colors, brush, opacity, feather, antialias,
-  and font.
-- GIMP environment/session diagnostics.
-- Open image inspection.
-- File open/export helpers.
-- Batch bridge operations.
-- MCP resources for status, images, and procedure index.
+```json
+{
+  "image_id": 1,
+  "max_width": 1024,
+  "max_height": 1024
+}
+```
 
-Some GIMP UI-only interactions are not directly scriptable. The route for those
-is to find the equivalent PDB or GEGL operation and call that instead.
+Crop a region for faster iteration:
 
-## Production Notes
+```json
+{
+  "image_id": 1,
+  "region": {
+    "origin_x": 100,
+    "origin_y": 100,
+    "width": 400,
+    "height": 300
+  },
+  "max_width": 800,
+  "max_height": 600
+}
+```
 
-- Normal operation uses a user-owned Unix socket with `0600` permissions.
-- The MCP server can auto-start a headless GIMP bridge; no GIMP menu click is
-  required for automation.
-- The visible GIMP menu entry remains available only as a manual debug path.
-- The bridge must be installed into the user's GIMP profile before auto-start
-  can work.
-- Do not expose the socket path to untrusted users. Anyone who can connect to
-  the socket can drive the GIMP process.
+## Manual Visible-GIMP Mode
+
+For normal automation, use `scripts/run_mcp_server.sh`. It auto-starts a
+headless bridge.
+
+For debugging against the visible GIMP app:
+
+1. Open GIMP.
+2. Run `Filters > Development > Start MCP Bridge`.
+3. Start your MCP client with the same `GIMP_MCP_SOCKET`.
+
+This manual menu is a debug fallback, not the recommended production path.
+
+## Development
+
+Run the smoke test:
+
+```sh
+./scripts/smoke_test.sh
+```
+
+Compile-check the Python files:
+
+```sh
+python3 -m py_compile src/gimp_mcp/server.py bridge/gimp_mcp_bridge.py
+```
+
+Install the bridge after editing it:
+
+```sh
+./scripts/install_bridge.sh
+```
+
+## Examples
+
+Generated examples are in `examples/generated/`, including:
+
+- `horse-from-gimp-mcp.png`
+- `bar-chart-from-gimp-mcp.png`
+
+## Security
+
+GIMP MCP is a local automation bridge. Treat access to the Unix socket as access
+to the running GIMP process.
+
+- Do not expose the socket to untrusted users.
+- Do not run the bridge as root.
+- Prefer the default Unix socket transport over TCP.
+- Review `SECURITY.md` before enabling any future raw Python execution feature.
+
+## License
+
+GPL-3.0-or-later. See `LICENSE`.

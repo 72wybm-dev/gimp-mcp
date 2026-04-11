@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "gimp": {
+      "command": "./scripts/run_mcp_server.sh"
+    }
+  }
+}

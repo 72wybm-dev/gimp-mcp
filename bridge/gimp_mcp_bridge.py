@@ -88,11 +88,16 @@ class BridgeServer:
             "get_image_bitmap": self.get_image_bitmap,
             "list_images": self.list_images,
             "get_image": self.get_image,
+            "list_layers": self.list_layers,
+            "set_layer_properties": self.set_layer_properties,
             "procedure_search": self.procedure_search,
             "procedure_describe": self.procedure_describe,
             "procedure_call": self.procedure_call,
             "open_file": self.open_file,
             "export_file": self.export_file,
+            "fill_rect": self.fill_rect,
+            "fill_ellipse": self.fill_ellipse,
+            "add_text": self.add_text,
             "draw_polyline": self.draw_polyline,
             "batch": self.batch,
         }
@@ -299,6 +304,23 @@ class BridgeServer:
         image = image_from_id(_require_int(params, "image_id"))
         return describe_image(image)
 
+    def list_layers(self, params: dict[str, Any]) -> dict[str, Any]:
+        image = image_from_id(_require_int(params, "image_id"))
+        return {"image_id": image.get_id(), "layers": [describe_item(layer) for layer in safe_list_items(image, "list_layers", "get_layers")]}
+
+    def set_layer_properties(self, params: dict[str, Any]) -> dict[str, Any]:
+        layer = layer_from_id(_require_int(params, "layer_id"))
+        if "name" in params:
+            layer.set_name(str(params["name"]))
+        if "visible" in params:
+            layer.set_visible(bool(params["visible"]))
+        if "opacity" in params:
+            layer.set_opacity(float(params["opacity"]))
+        if "mode" in params:
+            mode = enum_member(Gimp.LayerMode, str(params["mode"]))
+            layer.set_mode(mode)
+        return describe_item(layer)
+
     def procedure_search(self, params: dict[str, Any]) -> dict[str, Any]:
         query = str(params.get("query", ""))
         limit = int(params.get("limit", 50))
@@ -355,10 +377,68 @@ class BridgeServer:
             raise BridgeError(-32602, "options must be an object")
         return export_image_to_path(image, path, str(proc_name), options)
 
+    def fill_rect(self, params: dict[str, Any]) -> dict[str, Any]:
+        image = image_from_id(_require_int(params, "image_id"))
+        drawable = drawable_from_id(_require_int(params, "drawable_id"))
+        color = color_from_value(params.get("color", "black"))
+        Gimp.context_set_foreground(color)
+        image.select_rectangle(
+            Gimp.ChannelOps.REPLACE,
+            float(params.get("x", 0)),
+            float(params.get("y", 0)),
+            float(params.get("width", 1)),
+            float(params.get("height", 1)),
+        )
+        Gimp.Drawable.edit_fill(drawable, Gimp.FillType.FOREGROUND)
+        clear_selection(image)
+        flush_displays()
+        return {"success": True, "image_id": image.get_id(), "drawable_id": drawable.get_id()}
+
+    def fill_ellipse(self, params: dict[str, Any]) -> dict[str, Any]:
+        image = image_from_id(_require_int(params, "image_id"))
+        drawable = drawable_from_id(_require_int(params, "drawable_id"))
+        color = color_from_value(params.get("color", "black"))
+        Gimp.context_set_foreground(color)
+        image.select_ellipse(
+            Gimp.ChannelOps.REPLACE,
+            float(params.get("x", 0)),
+            float(params.get("y", 0)),
+            float(params.get("width", 1)),
+            float(params.get("height", 1)),
+        )
+        Gimp.Drawable.edit_fill(drawable, Gimp.FillType.FOREGROUND)
+        clear_selection(image)
+        flush_displays()
+        return {"success": True, "image_id": image.get_id(), "drawable_id": drawable.get_id()}
+
+    def add_text(self, params: dict[str, Any]) -> dict[str, Any]:
+        image = image_from_id(_require_int(params, "image_id"))
+        drawable = None
+        if "drawable_id" in params and params["drawable_id"] is not None:
+            drawable = drawable_from_id(int(params["drawable_id"]))
+        text_value = _require_str(params, "text")
+        color = color_from_value(params.get("color", "black"))
+        Gimp.context_set_foreground(color)
+        font_name = str(params.get("font", "Sans-serif"))
+        font = Gimp.Font.get_by_name(font_name)
+        if font is None:
+            raise BridgeError(-32602, f"Unknown font: {font_name!r}")
+        layer = Gimp.text_font(
+            image,
+            drawable,
+            float(params.get("x", 0)),
+            float(params.get("y", 0)),
+            text_value,
+            int(params.get("border", 0)),
+            bool(params.get("antialias", True)),
+            float(params.get("size", 32)),
+            font,
+        )
+        flush_displays()
+        return {"success": layer is not None, "text_layer": serialize_value(layer)}
+
     def draw_polyline(self, params: dict[str, Any]) -> dict[str, Any]:
-        drawable = Gimp.Drawable.get_by_id(_require_int(params, "drawable_id"))
-        if drawable is None or not drawable.is_valid():
-            raise BridgeError(-32602, f"Invalid drawable ID: {params.get('drawable_id')}")
+        drawable = drawable_from_id(_require_int(params, "drawable_id"))
 
         points = params.get("points")
         if not isinstance(points, list) or len(points) < 2:
@@ -645,6 +725,32 @@ def image_from_id(image_id: int):
     if image is None or not image.is_valid():
         raise BridgeError(-32602, f"Invalid image ID: {image_id}")
     return image
+
+
+def layer_from_id(layer_id: int):
+    layer = Gimp.Layer.get_by_id(layer_id)
+    if layer is None or not layer.is_valid():
+        raise BridgeError(-32602, f"Invalid layer ID: {layer_id}")
+    return layer
+
+
+def drawable_from_id(drawable_id: int):
+    drawable = Gimp.Drawable.get_by_id(drawable_id)
+    if drawable is None or not drawable.is_valid():
+        raise BridgeError(-32602, f"Invalid drawable ID: {drawable_id}")
+    return drawable
+
+
+def clear_selection(image) -> None:
+    if hasattr(Gimp, "Selection") and hasattr(Gimp.Selection, "none"):
+        Gimp.Selection.none(image)
+    elif hasattr(image, "select_none"):
+        image.select_none()
+
+
+def flush_displays() -> None:
+    if hasattr(Gimp, "displays_flush"):
+        Gimp.displays_flush()
 
 
 def describe_image(image) -> dict[str, Any]:

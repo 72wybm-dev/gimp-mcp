@@ -368,6 +368,34 @@ class GimpMcpServer:
                 },
                 lambda args: self.bridge.request("get_image", args),
             ),
+            "gimp.list_layers": Tool(
+                "gimp.list_layers",
+                "List layers for an image with IDs, names, visibility, opacity, dimensions, and offsets.",
+                {
+                    "type": "object",
+                    "required": ["image_id"],
+                    "properties": {"image_id": {"type": "integer"}},
+                    "additionalProperties": False,
+                },
+                lambda args: self.bridge.request("list_layers", args),
+            ),
+            "gimp.set_layer_properties": Tool(
+                "gimp.set_layer_properties",
+                "Update a layer's name, visibility, opacity, or blend mode.",
+                {
+                    "type": "object",
+                    "required": ["layer_id"],
+                    "properties": {
+                        "layer_id": {"type": "integer"},
+                        "name": {"type": "string"},
+                        "visible": {"type": "boolean"},
+                        "opacity": {"type": "number", "minimum": 0, "maximum": 100},
+                        "mode": {"type": "string", "description": "GIMP LayerMode enum name, e.g. NORMAL, MULTIPLY, SCREEN."},
+                    },
+                    "additionalProperties": False,
+                },
+                lambda args: self.bridge.request("set_layer_properties", args),
+            ),
             "gimp.procedure.search": Tool(
                 "gimp.procedure.search",
                 "Search GIMP's Procedure Database by name/help text. This is the discovery entry point for most GIMP features.",
@@ -433,9 +461,69 @@ class GimpMcpServer:
                 },
                 lambda args: self.bridge.request("export_file", args),
             ),
+            "gimp.fill_rect": Tool(
+                "gimp.fill_rect",
+                "Fill a rectangular region on a drawable using the foreground color.",
+                {
+                    "type": "object",
+                    "required": ["image_id", "drawable_id", "x", "y", "width", "height"],
+                    "properties": {
+                        "image_id": {"type": "integer"},
+                        "drawable_id": {"type": "integer"},
+                        "x": {"type": "number"},
+                        "y": {"type": "number"},
+                        "width": {"type": "number", "exclusiveMinimum": 0},
+                        "height": {"type": "number", "exclusiveMinimum": 0},
+                        "color": color_schema(),
+                    },
+                    "additionalProperties": False,
+                },
+                lambda args: self.bridge.request("fill_rect", args),
+            ),
+            "gimp.fill_ellipse": Tool(
+                "gimp.fill_ellipse",
+                "Fill an elliptical region on a drawable using the foreground color.",
+                {
+                    "type": "object",
+                    "required": ["image_id", "drawable_id", "x", "y", "width", "height"],
+                    "properties": {
+                        "image_id": {"type": "integer"},
+                        "drawable_id": {"type": "integer"},
+                        "x": {"type": "number"},
+                        "y": {"type": "number"},
+                        "width": {"type": "number", "exclusiveMinimum": 0},
+                        "height": {"type": "number", "exclusiveMinimum": 0},
+                        "color": color_schema(),
+                    },
+                    "additionalProperties": False,
+                },
+                lambda args: self.bridge.request("fill_ellipse", args),
+            ),
+            "gimp.add_text": Tool(
+                "gimp.add_text",
+                "Create a text layer in an image.",
+                {
+                    "type": "object",
+                    "required": ["image_id", "text", "x", "y"],
+                    "properties": {
+                        "image_id": {"type": "integer"},
+                        "drawable_id": {"type": "integer", "description": "Optional drawable for floating text selection; omit for a new text layer."},
+                        "text": {"type": "string"},
+                        "x": {"type": "number"},
+                        "y": {"type": "number"},
+                        "size": {"type": "number", "exclusiveMinimum": 0, "default": 32},
+                        "font": {"type": "string", "default": "Sans-serif"},
+                        "color": color_schema(),
+                        "border": {"type": "integer", "minimum": 0, "default": 0},
+                        "antialias": {"type": "boolean", "default": True},
+                    },
+                    "additionalProperties": False,
+                },
+                lambda args: self.bridge.request("add_text", args),
+            ),
             "gimp.draw_polyline": Tool(
                 "gimp.draw_polyline",
-                "Draw a polyline on a drawable using GIMP's active pencil/brush engine.",
+                "Draw a deterministic pixel polyline on a drawable.",
                 {
                     "type": "object",
                     "required": ["drawable_id", "points"],
@@ -450,14 +538,7 @@ class GimpMcpServer:
                                 "items": {"type": "number"},
                             },
                         },
-                        "color": {
-                            "description": "CSS color string, [r,g,b], [r,g,b,a], or {r,g,b,a}.",
-                            "oneOf": [
-                                {"type": "string"},
-                                {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 4},
-                                {"type": "object"},
-                            ],
-                        },
+                        "color": color_schema(),
                         "brush_size": {"type": "number", "default": 8},
                     },
                     "additionalProperties": False,
@@ -512,6 +593,17 @@ def gimp_binary_path(gimp_app: str) -> str:
     if not binary.exists():
         raise JsonRpcError(-32602, f"GIMP binary not found: {binary}", {"gimp_app": str(path)})
     return str(binary)
+
+
+def color_schema() -> dict[str, Any]:
+    return {
+        "description": "CSS color string, [r,g,b], [r,g,b,a], or {r,g,b,a}.",
+        "oneOf": [
+            {"type": "string"},
+            {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 4},
+            {"type": "object"},
+        ],
+    }
 
 
 def _tool_result(result: Any) -> dict[str, Any]:

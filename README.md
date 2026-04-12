@@ -29,6 +29,8 @@ need to open GIMP or click `Filters > Development`.
 - **PDB search, describe, and call** for broad GIMP feature coverage
 - **MCP image capture** with optional crop and max-size scaling
 - **Open image and layer inspection**
+- **First-class layer tools** for listing and updating layer properties
+- **Friendly drawing tools** for rectangles, ellipses, text, and polylines
 - **Foreground/background, brush, font, opacity, antialias, and feather state**
 - **File open/export helpers** for PNG, JPEG, WebP, TIFF, GIF, BMP, and XCF
 - **Batch bridge operations**
@@ -132,11 +134,16 @@ drive the GIMP process, so do not expose it to untrusted users.
 - `gimp.get_image_bitmap`: return a GIMP image as MCP image content
 - `gimp.list_images`: list open images and layer trees
 - `gimp.get_image`: inspect one image by ID
+- `gimp.list_layers`: list layers for one image
+- `gimp.set_layer_properties`: rename layers or update visibility, opacity, and blend mode
 - `gimp.procedure.search`: search GIMP's Procedure Database
 - `gimp.procedure.describe`: inspect procedure arguments and return values
 - `gimp.procedure.call`: call a GIMP PDB procedure
 - `gimp.open`: open an image file
 - `gimp.export`: export an image file
+- `gimp.fill_rect`: fill a rectangle on a drawable
+- `gimp.fill_ellipse`: fill an ellipse on a drawable
+- `gimp.add_text`: create a text layer
 - `gimp.draw_polyline`: draw deterministic pixel polylines
 - `gimp.batch`: run bridge operations in sequence
 
@@ -215,6 +222,12 @@ Run the smoke test:
 ./scripts/smoke_test.sh
 ```
 
+Run full local diagnostics:
+
+```sh
+./scripts/doctor.sh
+```
+
 Compile-check the Python files:
 
 ```sh
@@ -233,6 +246,7 @@ Generated examples are in `examples/generated/`, including:
 
 - `horse-from-gimp-mcp.png`
 - `bar-chart-from-gimp-mcp.png`
+- `shapes-text-demo.png`
 
 ## Security
 

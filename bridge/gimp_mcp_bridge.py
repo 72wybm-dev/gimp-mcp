@@ -93,6 +93,9 @@ class BridgeServer:
             "procedure_search": self.procedure_search,
             "procedure_describe": self.procedure_describe,
             "procedure_call": self.procedure_call,
+            "filter_list": self.filter_list,
+            "filter_describe": self.filter_describe,
+            "filter_apply": self.filter_apply,
             "open_file": self.open_file,
             "export_file": self.export_file,
             "fill_rect": self.fill_rect,
@@ -357,6 +360,63 @@ class BridgeServer:
         result = proc.run(config)
         return serialize_result(proc, result)
 
+    def filter_list(self, params: dict[str, Any]) -> dict[str, Any]:
+        query = str(params.get("query") or "").lower()
+        operations = sorted(Gimp.DrawableFilter.operation_get_available())
+        matches = [name for name in operations if query in name.lower()]
+        return {"query": query, "count": len(matches), "operations": matches}
+
+    def filter_describe(self, params: dict[str, Any]) -> dict[str, Any]:
+        operation = _require_str(params, "operation")
+        if operation not in Gimp.DrawableFilter.operation_get_available():
+            raise BridgeError(-32602, f"Unknown GEGL operation: {operation}")
+        specs = Gimp.DrawableFilter.operation_get_pspecs(operation)
+        properties = [describe_param_spec(specs.index(i)) for i in range(specs.length())]
+        return {"operation": operation, "properties": properties}
+
+    def filter_apply(self, params: dict[str, Any]) -> dict[str, Any]:
+        drawable = drawable_from_id(_require_int(params, "drawable_id"))
+        operation = _require_str(params, "operation")
+        if operation not in Gimp.DrawableFilter.operation_get_available():
+            raise BridgeError(-32602, f"Unknown GEGL operation: {operation}")
+        properties = params.get("properties") or {}
+        if not isinstance(properties, dict):
+            raise BridgeError(-32602, "properties must be an object")
+
+        drawable_filter = Gimp.DrawableFilter.new(drawable, operation, str(params.get("name") or operation))
+        config = drawable_filter.get_config()
+        specs = {spec.name: spec for spec in config.list_properties()}
+        try:
+            for key, value in properties.items():
+                if key not in specs:
+                    raise BridgeError(-32602, f"{operation} has no property named {key!r}", {"available": sorted(specs)})
+                set_filter_value(config, specs[key], value)
+        except Exception:
+            drawable_filter.delete()
+            raise
+        if "opacity" in params:
+            drawable_filter.set_opacity(float(params["opacity"]))
+        if params.get("blend_mode"):
+            drawable_filter.set_blend_mode(enum_member(Gimp.LayerMode, str(params["blend_mode"])))
+        drawable_filter.update()
+
+        applied = {spec.name: serialize_value(config.get_property(spec.name)) for spec in specs.values()}
+        if params.get("merge", True):
+            drawable.merge_filter(drawable_filter)
+            filter_id = None
+        else:
+            drawable.append_filter(drawable_filter)
+            filter_id = drawable_filter.get_id()
+        flush_displays()
+        return {
+            "success": True,
+            "drawable_id": drawable.get_id(),
+            "operation": operation,
+            "merged": filter_id is None,
+            "filter_id": filter_id,
+            "properties": applied,
+        }
+
     def open_file(self, params: dict[str, Any]) -> dict[str, Any]:
         path = _require_abs_path(params, "path", must_exist=True)
         proc = lookup_procedure("gimp-file-load")
@@ -542,7 +602,7 @@ def describe_param_spec(spec) -> dict[str, Any]:
     value_type = getattr(spec, "value_type", None)
     owner_type = getattr(spec, "owner_type", None)
     default = getattr(spec, "default_value", None)
-    return {
+    data = {
         "name": getattr(spec, "name", None),
         "nick": getattr(spec, "nick", None),
         "blurb": getattr(spec, "blurb", None),
@@ -552,6 +612,26 @@ def describe_param_spec(spec) -> dict[str, Any]:
         "flags": int(getattr(spec, "flags", 0)),
         "param_spec_type": type(spec).__name__,
     }
+    for bound in ("minimum", "maximum"):
+        if hasattr(spec, bound):
+            data[bound] = serialize_value(getattr(spec, bound))
+    choices = enum_choices(spec)
+    if choices:
+        data["choices"] = choices
+    return data
+
+
+def enum_choices(spec) -> list[str]:
+    if type(spec).__name__ == "ParamChoice" and hasattr(Gimp, "param_spec_choice_get_choice"):
+        try:
+            return list(Gimp.param_spec_choice_get_choice(spec).list_nicks())
+        except Exception:
+            return []
+    default = getattr(spec, "default_value", None)
+    if not type(spec).__name__.lower().endswith("enum") or default is None:
+        return []
+    values = getattr(type(default), "__enum_values__", {})
+    return [str(member.value_nick) for member in values.values()]
 
 
 def apply_config_args(proc, config, args: dict[str, Any]) -> None:
@@ -602,6 +682,11 @@ def set_config_value(config, spec, value: Any) -> None:
         value = color_from_value(value)
     elif "giofile" in type_name or param_type.endswith("file"):
         value = Gio.File.new_for_path(str(value))
+    elif type_name in {"gimpdoublearray", "gimpint32array"}:
+        value = gimp_array_from_list(spec, value)
+    elif isinstance(value, dict) and "id" in value:
+        # Paths, channels, selections, and filters arrive as typed refs like the cases above.
+        value = object_from_ref(value)
     elif isinstance(value, list) and hasattr(config, "set_core_object_array"):
         try:
             config.set_core_object_array(spec.name, [object_from_ref(item) for item in value])
@@ -610,6 +695,47 @@ def set_config_value(config, spec, value: Any) -> None:
             pass
 
     config.set_property(spec.name, value)
+
+
+def gimp_array_from_list(spec, value: Any):
+    if not isinstance(value, (list, tuple)):
+        raise BridgeError(-32602, f"{spec.name} expects an array of numbers, got {value!r}")
+    gvalue = GObject.Value()
+    gvalue.init(spec.value_type)
+    # Setting the GValue itself on the config segfaults GIMP 3.2; pass the boxed array instead.
+    if spec.value_type.name == "GimpDoubleArray":
+        Gimp.value_set_double_array(gvalue, [float(item) for item in value])
+    else:
+        Gimp.value_set_int32_array(gvalue, [int(item) for item in value])
+    return gvalue.get_boxed()
+
+
+def set_filter_value(config, spec, value: Any) -> None:
+    type_name = getattr(getattr(spec, "value_type", None), "name", "").lower()
+    if "geglcolor" in type_name:
+        value = color_from_value(value)
+    elif isinstance(value, str) and type(spec).__name__.lower().endswith("enum"):
+        value = filter_enum_member(spec, value)
+    elif isinstance(value, int) and type_name in {"gdouble", "gfloat"}:
+        value = float(value)
+    if type(spec).__name__ == "ParamChoice":
+        choices = enum_choices(spec)
+        if choices and value not in choices:
+            # GIMP silently falls back to the default for unknown choices; fail loudly instead.
+            raise BridgeError(-32602, f"Unknown value {value!r} for {spec.name}; choices: {choices}")
+    minimum, maximum = getattr(spec, "minimum", None), getattr(spec, "maximum", None)
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and minimum is not None and maximum is not None:
+        if not minimum <= value <= maximum:
+            raise BridgeError(-32602, f"{spec.name}={value} is outside [{minimum}, {maximum}]")
+    config.set_property(spec.name, value)
+
+
+def filter_enum_member(spec, value: str):
+    wanted = value.replace("_", "-").lower()
+    for member in getattr(type(spec.default_value), "__enum_values__", {}).values():
+        if wanted in {str(member.value_nick).lower(), str(member.value_name).replace("_", "-").lower()}:
+            return member
+    raise BridgeError(-32602, f"Unknown value {value!r} for {spec.name}; choices: {enum_choices(spec)}")
 
 
 def object_from_ref(value: Any) -> Any:
@@ -625,6 +751,8 @@ def object_from_ref(value: Any) -> Any:
         return Gimp.Drawable.get_by_id(ref_id)
     if kind == "display":
         return Gimp.Display.get_by_id(ref_id)
+    if kind in {"filter", "drawablefilter"}:
+        return Gimp.DrawableFilter.get_by_id(ref_id)
     return Gimp.Item.get_by_id(ref_id)
 
 
@@ -809,11 +937,24 @@ def serialize_result(proc, result) -> dict[str, Any]:
     return_specs = list(proc.get_return_values())
     for index, spec in enumerate(return_specs, start=1):
         try:
-            raw = result.index(index)
+            # pygobject can't unbox object/color arrays via index(); ValueArray has typed getters for them.
+            if type(spec).__name__ == "ParamCoreObjectArray":
+                raw = list(result.get_core_object_array(index))
+            elif type(spec).__name__ == "ParamColorArray":
+                raw = list(result.get_color_array(index))
+            elif type(spec).__name__ == "ParamInt32Array":
+                raw = list(Gimp.value_get_int32_array(GObject.Value(Gimp.Int32Array, result.index(index))))
+            elif type(spec).__name__ == "ParamDoubleArray":
+                raw = list(Gimp.value_get_double_array(GObject.Value(Gimp.DoubleArray, result.index(index))))
+            else:
+                raw = result.index(index)
         except Exception as exc:
             values.append({"name": spec.name, "error": str(exc)})
             continue
-        values.append({"name": spec.name, "value": serialize_value(raw)})
+        try:
+            values.append({"name": spec.name, "value": serialize_value(raw)})
+        except Exception as exc:
+            values.append({"name": spec.name, "error": f"could not serialize {type(raw).__name__}: {exc}"})
 
     return {
         "procedure": proc.get_name(),
@@ -833,6 +974,8 @@ def serialize_value(value: Any) -> Any:
         return str(value)
     if isinstance(value, (list, tuple)):
         return [serialize_value(item) for item in value]
+    if isinstance(value, Gegl.Color):
+        return serialize_color(value)
     if hasattr(value, "get_path"):
         try:
             return value.get_path()

@@ -4,6 +4,7 @@ import argparse
 import atexit
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -686,6 +687,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv or sys.argv[1:])
+    # MCP clients often stop servers with SIGTERM/SIGHUP; exit normally so atexit stops auto-started GIMP.
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(signum, lambda *_: sys.exit(0))
     server = GimpMcpServer(GimpBridgeClient(args.socket, args.timeout, args.auto_start_bridge, args.gimp_app))
     server.run()
 

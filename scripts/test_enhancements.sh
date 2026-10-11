@@ -171,8 +171,48 @@ check("rejected filters leave no residue", filter_names(faint) == ["keep-me"], s
 # Not covered: GimpInt32Array arguments and GimpColorArray return values. No GIMP 3.2
 # PDB procedure uses them, so those branches cannot be exercised here.
 
+import time
+
+
+def running(pid):
+    return subprocess.run(["kill", "-0", str(pid)], capture_output=True).returncode == 0
+
+
+def wait_gone(pids, seconds=10):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline and any(running(pid) for pid in pids):
+        time.sleep(0.5)
+    leftover = [pid for pid in pids if running(pid)]
+    for pid in leftover:
+        subprocess.run(["kill", str(pid)])
+    return leftover
+
+
+def gimp_pids():
+    bridge = tool("gimp.status")["pid"]
+    gimp = int(subprocess.run(["ps", "-o", "ppid=", "-p", str(bridge)], capture_output=True, text=True).stdout)
+    return bridge, gimp
+
+
+# Closing stdin stops the server, which terminates GIMP; the bridge plug-in must exit
+# too instead of lingering as an orphan that answers on the socket with no GIMP behind it.
+bridge_pid, gimp_pid = gimp_pids()
 proc.stdin.close()
 proc.wait(timeout=30)
+leftover = wait_gone([bridge_pid, gimp_pid])
+check("GIMP and bridge exit when server stdin closes", not leftover, f"still running: {leftover}" if leftover else "")
+check("bridge removes its socket on exit", not os.path.exists(os.environ["GIMP_MCP_SOCKET"]))
+
+# Clients may instead stop the server with SIGTERM; auto-started GIMP must not survive that.
+proc = subprocess.Popen([server], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                        env={**os.environ, "GIMP_MCP_SOCKET": os.environ["GIMP_MCP_SOCKET"]})
+rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "enhancement-tests", "version": "1"}})
+bridge_pid, gimp_pid = gimp_pids()
+proc.terminate()
+proc.wait(timeout=30)
+leftover = wait_gone([bridge_pid, gimp_pid])
+check("GIMP and bridge exit when server gets SIGTERM", not leftover, f"still running: {leftover}" if leftover else "")
+
 if failures:
     print(f"\n{len(failures)} failed: {failures}")
     sys.exit(1)

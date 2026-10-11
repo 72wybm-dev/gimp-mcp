@@ -434,6 +434,47 @@ class GimpMcpServer:
                 },
                 lambda args: self.bridge.request("procedure_call", args),
             ),
+            "gimp.filter.list": Tool(
+                "gimp.filter.list",
+                "List GEGL filter operations (e.g. gegl:unsharp-mask, gegl:noise-reduction) usable with gimp.filter.apply.",
+                {
+                    "type": "object",
+                    "properties": {"query": {"type": "string", "description": "Case-insensitive substring to match."}},
+                    "additionalProperties": False,
+                },
+                lambda args: self.bridge.request("filter_list", args),
+            ),
+            "gimp.filter.describe": Tool(
+                "gimp.filter.describe",
+                "Describe a GEGL filter's properties with types, defaults, ranges, and enum choices.",
+                {
+                    "type": "object",
+                    "required": ["operation"],
+                    "properties": {"operation": {"type": "string", "description": "GEGL operation name, e.g. gegl:unsharp-mask."}},
+                    "additionalProperties": False,
+                },
+                lambda args: self.bridge.request("filter_describe", args),
+            ),
+            "gimp.filter.apply": Tool(
+                "gimp.filter.apply",
+                "Apply a GEGL filter with custom properties to a drawable. Respects the active selection. "
+                "Merges destructively by default; set merge=false to keep it as a non-destructive layer effect.",
+                {
+                    "type": "object",
+                    "required": ["drawable_id", "operation"],
+                    "properties": {
+                        "drawable_id": {"type": "integer"},
+                        "operation": {"type": "string", "description": "GEGL operation name, e.g. gegl:unsharp-mask."},
+                        "properties": {"type": "object", "description": "Filter property names to values; see gimp.filter.describe."},
+                        "name": {"type": "string", "description": "Optional effect name."},
+                        "opacity": {"type": "number", "minimum": 0, "maximum": 1},
+                        "blend_mode": {"type": "string", "description": "GIMP LayerMode enum name, e.g. NORMAL, OVERLAY."},
+                        "merge": {"type": "boolean", "default": True},
+                    },
+                    "additionalProperties": False,
+                },
+                lambda args: self.bridge.request("filter_apply", args),
+            ),
             "gimp.open": Tool(
                 "gimp.open",
                 "Open an image file in GIMP through the file load PDB procedure.",

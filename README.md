@@ -139,6 +139,9 @@ drive the GIMP process, so do not expose it to untrusted users.
 - `gimp.procedure.search`: search GIMP's Procedure Database
 - `gimp.procedure.describe`: inspect procedure arguments and return values
 - `gimp.procedure.call`: call a GIMP PDB procedure
+- `gimp.filter.list`: list GEGL filter operations
+- `gimp.filter.describe`: inspect a GEGL filter's properties, ranges, and choices
+- `gimp.filter.apply`: apply a GEGL filter with custom properties (merged or non-destructive)
 - `gimp.open`: open an image file
 - `gimp.export`: export an image file
 - `gimp.fill_rect`: fill a rectangle on a drawable
@@ -146,6 +149,30 @@ drive the GIMP process, so do not expose it to untrusted users.
 - `gimp.add_text`: create a text layer
 - `gimp.draw_polyline`: draw deterministic pixel polylines
 - `gimp.batch`: run bridge operations in sequence
+
+## GEGL Filters
+
+The PDB can create GEGL filters but cannot configure them, so filters such as
+unsharp mask or noise reduction are exposed through dedicated tools that use
+the libgimp `DrawableFilter` API:
+
+```json
+{
+  "drawable_id": 2,
+  "operation": "gegl:unsharp-mask",
+  "properties": { "std-dev": 2.0, "scale": 1.2, "threshold": 0.02 }
+}
+```
+
+Unknown properties, out-of-range numbers, and invalid choice values are
+rejected instead of silently falling back to GIMP's defaults. Set
+`"merge": false` to keep the filter as a non-destructive layer effect.
+
+Array arguments such as `gimp-drawable-curves-spline` `points` can be passed
+as plain JSON number arrays.
+
+Note: `gimp-drawable-levels` and curves operate on linear-light values, while
+`gimp-drawable-histogram` reports perceptual values.
 
 ## Example PDB Call
 

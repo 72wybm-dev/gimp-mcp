@@ -684,6 +684,9 @@ def set_config_value(config, spec, value: Any) -> None:
         value = Gio.File.new_for_path(str(value))
     elif type_name in {"gimpdoublearray", "gimpint32array"}:
         value = gimp_array_from_list(spec, value)
+    elif isinstance(value, dict) and "id" in value:
+        # Paths, channels, selections, and filters arrive as typed refs like the cases above.
+        value = object_from_ref(value)
     elif isinstance(value, list) and hasattr(config, "set_core_object_array"):
         try:
             config.set_core_object_array(spec.name, [object_from_ref(item) for item in value])
@@ -748,6 +751,8 @@ def object_from_ref(value: Any) -> Any:
         return Gimp.Drawable.get_by_id(ref_id)
     if kind == "display":
         return Gimp.Display.get_by_id(ref_id)
+    if kind in {"filter", "drawablefilter"}:
+        return Gimp.DrawableFilter.get_by_id(ref_id)
     return Gimp.Item.get_by_id(ref_id)
 
 
@@ -937,6 +942,10 @@ def serialize_result(proc, result) -> dict[str, Any]:
                 raw = list(result.get_core_object_array(index))
             elif type(spec).__name__ == "ParamColorArray":
                 raw = list(result.get_color_array(index))
+            elif type(spec).__name__ == "ParamInt32Array":
+                raw = list(Gimp.value_get_int32_array(GObject.Value(Gimp.Int32Array, result.index(index))))
+            elif type(spec).__name__ == "ParamDoubleArray":
+                raw = list(Gimp.value_get_double_array(GObject.Value(Gimp.DoubleArray, result.index(index))))
             else:
                 raw = result.index(index)
         except Exception as exc:
@@ -967,10 +976,6 @@ def serialize_value(value: Any) -> Any:
         return [serialize_value(item) for item in value]
     if isinstance(value, Gegl.Color):
         return serialize_color(value)
-    if isinstance(value, Gimp.DoubleArray):
-        return list(Gimp.double_array_get_values(value))
-    if isinstance(value, Gimp.Int32Array):
-        return list(Gimp.int32_array_get_values(value))
     if hasattr(value, "get_path"):
         try:
             return value.get_path()

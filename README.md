@@ -171,7 +171,8 @@ rejected instead of silently falling back to GIMP's defaults. Set
 Array arguments such as `gimp-drawable-curves-spline` `points` can be passed
 as plain JSON number arrays.
 
-Note: `gimp-drawable-levels` and curves operate on linear-light values, while
+Note: `gimp-drawable-levels`, curves, and `gimp-drawable-get-pixel` use
+linear-light values (`#808080` reads back as about 0.216), while
 `gimp-drawable-histogram` reports perceptual values.
 
 ## Example PDB Call
@@ -247,6 +248,13 @@ Run the smoke test:
 
 ```sh
 ./scripts/smoke_test.sh
+```
+
+Run the filter and value-conversion regression tests (checks pixel values, not
+just return codes):
+
+```sh
+./scripts/test_enhancements.sh
 ```
 
 Run full local diagnostics:

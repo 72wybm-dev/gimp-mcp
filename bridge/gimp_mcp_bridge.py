@@ -110,15 +110,31 @@ class BridgeServer:
         if existing.exists():
             existing.unlink()
 
+        gimp_pid = os.getppid()
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
             server.bind(self.socket_path)
             os.chmod(self.socket_path, 0o600)
+            socket_inode = os.stat(self.socket_path).st_ino
             server.listen(8)
+            server.settimeout(1.0)
             print(f"GIMP MCP bridge listening on {self.socket_path}", file=sys.stderr, flush=True)
-            while True:
-                conn, _ = server.accept()
+            # The plug-in process outlives a terminated GIMP; exit with it so a dead bridge
+            # doesn't keep answering on the socket.
+            while os.getppid() == gimp_pid:
+                try:
+                    conn, _ = server.accept()
+                except socket.timeout:
+                    continue
+                conn.settimeout(None)
                 thread = threading.Thread(target=self._serve_connection, args=(conn,), daemon=True)
                 thread.start()
+        try:
+            # Only remove the socket if a newer bridge hasn't replaced it.
+            if os.stat(self.socket_path).st_ino == socket_inode:
+                os.unlink(self.socket_path)
+        except FileNotFoundError:
+            pass
+        print("GIMP MCP bridge exiting: GIMP is gone", file=sys.stderr, flush=True)
 
     def _serve_connection(self, conn: socket.socket) -> None:
         with conn:
